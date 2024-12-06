@@ -17,6 +17,9 @@ import tempfile
 import subprocess
 from dotenv import load_dotenv
 from pypdf import PdfReader
+import tensorflow as tf
+from transformers import pipeline
+
 
 # %% [markdown]
 #  ## Load Environment Variables
@@ -40,7 +43,6 @@ AVERAGE_SPEAKING_SPEED_WPM = 150
 #  This function gets all the text from a PDF file and organizes it by page.
 
 # %%
-from transformers import pipeline
 
 def extract_text_from_pdf(pdf_path):
     """Extract text from PDF with better error handling and metadata."""
@@ -390,12 +392,13 @@ def generate_audio(dialogue_text):
 #  ## Streamlit Web Interface
 #  This creates our user interface for uploading PDFs and generating podcasts.
 
+
 # %%
 def main():
     st.title("PDF to Podcast Generator")
     st.write("Upload a PDF to generate a dialogue script and convert it to audio with distinct voices.")
 
-    uploaded_file = st.file_uploader("Upload your PDF", type="pdf", accept_multiple_files=False)
+    uploaded_file = st.file_uploader("Upload your PDF", type=["pdf"], accept_multiple_files=False)
 
     # Dropdown for content format
     content_format = st.selectbox("Select Content Format", ["Podcast", "Short-form Video Script (TikTok, Reels, Shorts)"])
@@ -419,12 +422,30 @@ def main():
                         st.error("Failed to extract text from the PDF.")
                         return
 
+                    # Debugging: Display extracted text data
+                    st.subheader("Extracted Text Data")
+                    st.write(text_data)
+
+                    # Summarize text data
+                    summarized_text_data = summarize_text_data(text_data)
+                    if not summarized_text_data:
+                        st.error("Failed to summarize text from the PDF.")
+                        return
+
+                    # Debugging: Display summarized text data
+                    st.subheader("Summarized Text Data")
+                    st.write(summarized_text_data)
+
                     # Create text chunks
-                    chunks_data = chunk_text(text_data)
+                    chunks_data = chunk_text(summarized_text_data)
                     chunks = [chunk['text'] for chunk in chunks_data]
 
                     if chunks:
                         st.success("Successfully created text chunks!")
+
+                        # Debugging: Display text chunks
+                        st.subheader("Text Chunks")
+                        st.write(chunks)
 
                         # Trim chunks to fit desired podcast length
                         max_words = calculate_max_words(max_length)
@@ -460,10 +481,16 @@ def main():
 
                     # Cleanup temporary file
                     os.unlink(temp_pdf_path)
+
+        except KeyboardInterrupt:
+            st.warning("Process interrupted by user.")
+            tf.keras.backend.clear_session()
+            st.stop()
         except Exception as e:
             st.error(f"An error occurred: {str(e)}")
 
 # %% [markdown]
 # This file is originally a .py so I can run it with streamlit, but i converted it into a notebook to add explanations
 
-
+if __name__ == "__main__":
+    main()
