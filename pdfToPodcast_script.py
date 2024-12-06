@@ -19,6 +19,8 @@ from dotenv import load_dotenv
 from pypdf import PdfReader
 import tensorflow as tf
 from transformers import pipeline
+import edge_tts
+import asyncio
 
 
 # %% [markdown]
@@ -89,46 +91,6 @@ def summarize_text_data(text_data):
     return summarized_text_data
 
 # %% [markdown]
-#  ## Text Chunking
-#  We break down the text into smaller, manageable pieces for grok while keeping sentences together. I use overlapping words
-
-# %%
-def chunk_text(text_data, chunk_size=500, overlap=50):
-    chunks = []
-    for page_data in text_data:
-        text = page_data['text']
-        words = text.split()
-
-        current_chunk = []
-        current_size = 0
-
-        for word in words:
-            current_chunk.append(word)
-            current_size += len(word) + 1  # +1 for space
-
-            # Check if chunk is complete at end of sentence
-            if current_size >= chunk_size and word[-1] in '.!?':
-                chunks.append({
-                    'text': ' '.join(current_chunk),
-                    'page': page_data['page'],
-                    'size': current_size
-                })
-                # Keep overlap words for context
-                overlap_words = current_chunk[-int(overlap/5):]  # Approximate words for overlap
-                current_chunk = overlap_words
-                current_size = sum(len(word) + 1 for word in overlap_words)
-
-        # Add remaining chunk if it's substantial
-        if current_size > overlap:
-            chunks.append({
-                'text': ' '.join(current_chunk),
-                'page': page_data['page'],
-                'size': current_size
-            })
-
-    return chunks
-
-# %% [markdown]
 #  ## File Processing
 #  This function handles the uploaded PDF file safely.
 
@@ -175,7 +137,7 @@ def trim_chunks_to_max_words(chunks, max_words):
 #  This function turns our text into a natural conversation between a host and expert. I use the same formatting for both but change the label, this way its easy to process the audio.
 
 # %%
-def generate_podcast_script(chunks, format_type):
+def generate_podcast_script(summarized_text_data):
     try:
         dialogues = []
         headers = {
@@ -183,7 +145,6 @@ def generate_podcast_script(chunks, format_type):
             'Authorization': f'Bearer {XAI_API_KEY}'
         }
 
-        # Initial system message to set context
         system_message = {
             "role": "system",
             "content": """You are an expert podcast script writer. Your task is to:
@@ -194,69 +155,58 @@ def generate_podcast_script(chunks, format_type):
                             5. Keep a consistent tone throughout the conversation"""
         }
 
-        for i, chunk in enumerate(chunks):
-            # Extract metadata if available
+        # Generate introduction
+        introduction_prompt = {
+            "role": "user",
+            "content": """Create an engaging introduction for the podcast that includes:
+                1. A brief overview of the content
+                2. An introduction of the host and expert
+                3. A hook to capture the audience's attention"""
+        }
+        data = {
+            'model': MODEL,
+            'messages': [system_message, introduction_prompt],
+            'temperature': 0.7,
+            'max_tokens': 1000,
+            'top_p': 0.9,
+            'frequency_penalty': 0.2,
+            'presence_penalty': 0.2
+        }
+        response = requests.post(XAI_API_URL, headers=headers, json=data)
+        if response.status_code == 200:
+            introduction = response.json()['choices'][0]['message']['content']
+            dialogues.append(introduction)
+        else:
+            st.error(f"API error for introduction: {response.status_code} - {response.text}")
 
-            if format_type == "Podcast":
-                messages = [
-                    system_message,
-                    {
-                        "role": "user",
-                        "content": f"""
-                        Convert this content into a natural podcast dialogue:
-
-                        CONTENT:
-                        {chunk}
-
-                        REQUIREMENTS:
-                        1. Use 'Host' and 'Expert' as speakers
-                        2. Format as:
-                           **Host:** [dialogue]
-                           **Expert:** [dialogue]
-                        3. Include:
-                           - 1-2 clarifying questions from the Host
-                           - Real-world examples or analogies
-                           - Natural transitions
-                        4. Maintain technical accuracy while being conversational
-                        5. Keep responses concise (2-3 sentences per speaker turn)
-                        """
-                    }
-                ]
-            else: return "Invalid format type"
-
-            data = {
-                'model': MODEL,
-                'messages': messages,
-                'temperature': 0.7,
-                'max_tokens': 1000,
-                'top_p': 0.9,
-                'frequency_penalty': 0.2,
-                'presence_penalty': 0.2
+        # Generate Q&A section
+        for i, item in enumerate(summarized_text_data):
+            qna_prompt = {
+                "role": "user",
+                "content": f"""Create a Q&A section based on the following content:
+                CONTENT:
+                {item['text']}
+                REQUIREMENTS:
+                1. Use 'Host' and 'Expert' as speakers
+                2. Format as:
+                   **Host:** [dialogue]
+                   **Expert:** [dialogue]
+                3. Include:
+                   - 1-2 clarifying questions from the Host
+                   - Real-world examples or analogies
+                   - Natural transitions
+                4. Maintain technical accuracy while being conversational
+                5. Keep responses concise (2-3 sentences per speaker turn)"""
             }
-
-            st.write(f"Processing chunk {i+1}/{len(chunks)}")
+            data['messages'] = [system_message, qna_prompt]
             response = requests.post(XAI_API_URL, headers=headers, json=data)
-
             if response.status_code == 200:
-                result = response.json()
-                dialogue = result['choices'][0]['message']['content']
-                dialogues.append(dialogue)
-
-                # Add transition prompt if not the last chunk
-                if i < len(chunks) - 1:
-                    transition_prompt = {
-                        "role": "user",
-                        "content": "Generate a smooth transition to the next topic that maintains flow and engagement."
-                    }
-                    data['messages'] = [system_message, transition_prompt]
-                    transition_response = requests.post(XAI_API_URL, headers=headers, json=data)
-                    if transition_response.status_code == 200:
-                        transition = transition_response.json()['choices'][0]['message']['content']
-                        dialogues.append(transition)
+                qna = response.json()['choices'][0]['message']['content']
+                dialogues.append(qna)
             else:
-                st.error(f"API error for chunk {i+1}: {response.status_code} - {response.text}")
+                st.error(f"API error for Q&A section {i+1}: {response.status_code} - {response.text}")
 
-        # Generate conclusion This section still could be fixed 
+        # Generate conclusion
         conclusion_prompt = {
             "role": "user",
             "content": """Create a conclusion that:
@@ -266,19 +216,20 @@ def generate_podcast_script(chunks, format_type):
                 4. Thanks the audience
                 Keep it under 1 minute when spoken."""
         }
-
         data['messages'] = [system_message, conclusion_prompt]
-        conclusion_response = requests.post(XAI_API_URL, headers=headers, json=data)
-        if conclusion_response.status_code == 200:
-            conclusion = conclusion_response.json()['choices'][0]['message']['content']
+        response = requests.post(XAI_API_URL, headers=headers, json=data)
+        if response.status_code == 200:
+            conclusion = response.json()['choices'][0]['message']['content']
             dialogues.append(conclusion)
+        else:
+            st.error(f"API error for conclusion: {response.status_code} - {response.text}")
 
         return '\n\n'.join(dialogues)
 
     except Exception as e:
         st.error(f"Error generating podcast script: {str(e)}")
         return ""
-
+    
 # %% [markdown]
 #  ## Audio Processing
 #  These functions handle creating and combining audio files. This way it can create 2 of them then concatenate them and create a new one
@@ -308,8 +259,6 @@ def concatenate_audio(file_list, output_path):
 #  This function converts our script into spoken audio using different voices. I tried gtts but it doesn't allow for 2 voices, and some of the more complex ones require more setup. Edge_tts was the best one I could find with multiple voices, this still sounds a bit robotic but still can be listened to.
 
 # %%
-import asyncio
-import edge_tts
 
 def generate_audio(dialogue_text):
     try:
@@ -400,86 +349,53 @@ def main():
 
     uploaded_file = st.file_uploader("Upload your PDF", type=["pdf"], accept_multiple_files=False)
 
-    # Dropdown for content format
-    content_format = st.selectbox("Select Content Format", ["Podcast", "Short-form Video Script (TikTok, Reels, Shorts)"])
-
-    # Input for max podcast length
-    max_length = st.number_input("Maximum Length (minutes)", min_value=1, max_value=60, value=5, step=1)
-
-    # Button to generate script and audio
     generate_button = st.button("Generate Script and Audio")
 
     if generate_button and uploaded_file is not None:
         try:
             with st.spinner("Processing PDF and creating script..."):
-                # Save uploaded file temporarily
                 temp_pdf_path = process_uploaded_file(uploaded_file)
 
                 if temp_pdf_path:
-                    # Extract text from PDF
                     text_data = extract_text_from_pdf(temp_pdf_path)
                     if not text_data:
                         st.error("Failed to extract text from the PDF.")
                         return
 
-                    # Debugging: Display extracted text data
                     st.subheader("Extracted Text Data")
                     st.write(text_data)
 
-                    # Summarize text data
                     summarized_text_data = summarize_text_data(text_data)
                     if not summarized_text_data:
                         st.error("Failed to summarize text from the PDF.")
                         return
 
-                    # Debugging: Display summarized text data
                     st.subheader("Summarized Text Data")
                     st.write(summarized_text_data)
 
-                    # Create text chunks
-                    chunks_data = chunk_text(summarized_text_data)
-                    chunks = [chunk['text'] for chunk in chunks_data]
+                    script = generate_podcast_script(summarized_text_data)
 
-                    if chunks:
-                        st.success("Successfully created text chunks!")
+                    if script:
+                        st.subheader("Generated Script")
+                        st.text_area("Script", script, height=400)
 
-                        # Debugging: Display text chunks
-                        st.subheader("Text Chunks")
-                        st.write(chunks)
+                        st.write("Generating audio...")
+                        audio_data = generate_audio(script)
+                        if audio_data:
+                            st.audio(audio_data, format="audio/wav")
 
-                        # Trim chunks to fit desired podcast length
-                        max_words = calculate_max_words(max_length)
-                        trimmed_chunks = trim_chunks_to_max_words(chunks, max_words)
-
-                        # Generate the script
-                        script = generate_podcast_script(trimmed_chunks, content_format)
-
-                        if script:
-                            st.subheader("Generated Script")
-                            st.text_area("Script", script, height=400)
-
-                            st.write("Generating audio...")
-                            audio_data = generate_audio(script)
-                            if audio_data:
-                                # Play audio
-                                st.audio(audio_data, format="audio/wav")
-
-                                # Download button with key to prevent app reset
-                                st.download_button(
-                                    "Download Complete Podcast Audio",
-                                    audio_data,
-                                    file_name="complete_podcast.wav",
-                                    mime="audio/wav",
-                                    key="download_button"
-                                )
-                            else:
-                                st.error("Failed to generate audio.")
+                            st.download_button(
+                                "Download Complete Podcast Audio",
+                                audio_data,
+                                file_name="complete_podcast.wav",
+                                mime="audio/wav",
+                                key="download_button"
+                            )
                         else:
-                            st.error("Failed to generate script.")
+                            st.error("Failed to generate audio.")
                     else:
-                        st.error("No text chunks were created from the PDF.")
+                        st.error("Failed to generate script.")
 
-                    # Cleanup temporary file
                     os.unlink(temp_pdf_path)
 
         except KeyboardInterrupt:
