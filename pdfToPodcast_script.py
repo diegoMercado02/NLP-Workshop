@@ -106,38 +106,13 @@ def process_uploaded_file(uploaded_file):
         st.error(f"Error processing uploaded file: {str(e)}")
         return None
 
-# %% [markdown]
-#  ## Word Count Management
-#  These functions help control the length of the final podcast.
-
-# %%
-def calculate_max_words(max_minutes):
-    return max_minutes * AVERAGE_SPEAKING_SPEED_WPM
-
-def trim_chunks_to_max_words(chunks, max_words):
-    try:
-        total_words = 0
-        trimmed_chunks = []
-        for chunk in chunks:
-            chunk_word_count = len(chunk.split())
-            if total_words + chunk_word_count > max_words and trimmed_chunks:
-                break
-            trimmed_chunks.append(chunk)
-            total_words += chunk_word_count
-        if not trimmed_chunks and chunks:
-            trimmed_chunks.append(chunks[0])  # Ensure at least one chunk
-        st.write(f"Trimmed to {len(trimmed_chunks)} chunks")  # Debugging info
-        return trimmed_chunks
-    except Exception as e:
-        st.error(f"Error trimming chunks: {str(e)}")
-        return []
 
 # %% [markdown]
 #  ## Script Generation
 #  This function turns our text into a natural conversation between a host and expert. I use the same formatting for both but change the label, this way its easy to process the audio.
 
 # %%
-def generate_podcast_script(summarized_text_data):
+def generate_podcast_script(summarized_text_data, first_page_text):
     try:
         dialogues = []
         headers = {
@@ -148,20 +123,32 @@ def generate_podcast_script(summarized_text_data):
         system_message = {
             "role": "system",
             "content": """You are an expert podcast script writer. Your task is to:
-                            1. Convert technical content into engaging dialogue
-                            2. Maintain accuracy while making content accessible
-                            3. Create natural transitions between topics
-                            4. Include relevant examples and analogies
-                            5. Keep a consistent tone throughout the conversation"""
+                    1. Convert technical content into engaging dialogue
+                    2. Maintain accuracy while making content accessible
+                    3. Create natural transitions between topics
+                    4. Include relevant examples and analogies
+                    5. Keep a consistent tone throughout the conversation
+                    REQUIREMENTS:
+                    1. Use 'Host' and 'Expert' as speakers
+                    2. Always Format as:
+                       **Host:** [dialogue]
+                       **Expert:** [dialogue]"""
         }
 
         # Generate introduction
         introduction_prompt = {
             "role": "user",
-            "content": """Create an engaging introduction for the podcast that includes:
+            "content": f"""Create an engaging introduction for the podcast that includes:
                 1. A brief overview of the content
-                2. An introduction of the host and expert
-                3. A hook to capture the audience's attention"""
+                2. An introduction of the host 'Diego' as Host 
+                3. An introduction of an author, if no writters name refer in the dialog as expert
+                3. A hook to capture the audience's attention
+                4. Mention that this is an AI-generated podcast
+                CONTENT:
+                {first_page_text}
+                TEMPLATE:
+                Host: Welcome to "Diego's AI podcasts," your go-to podcast for diving into complex topics with the help of artificial intelligence! I'm your host, Diego, and today we have a special guest who is an expert in [Expertise Area]. Joining us is [Expert Name], a [brief description of expertise]. They've been at the forefront of [mention relevant achievements or contributions]. Today, we'll be exploring [brief overview of podcast topic], delving deep into [specific aspect of the topic]. Get ready to dive into the fascinating world of [Theme/Topic]!
+                Expert: Thank you, Diego! I'm thrilled to be here and discuss [specific aspect of the topic]. It's an exciting time in [Expertise Area], and I'm looking forward to sharing insights and exploring new ideas with you.  Let's get started!"""
         }
         data = {
             'model': MODEL,
@@ -195,8 +182,17 @@ def generate_podcast_script(summarized_text_data):
                    - 1-2 clarifying questions from the Host
                    - Real-world examples or analogies
                    - Natural transitions
+                   - Relevant technical details
+                   - Paraphrase the questions and answers in a podcast-friendly way, not a literal Q&A
+                   - 
                 4. Maintain technical accuracy while being conversational
-                5. Keep responses concise (2-3 sentences per speaker turn)"""
+                5. Keep responses concise (2-3 sentences per speaker turn)
+                6. Do not use phrases like today we are talking about, the topic of today is, etc.
+                    REQUIREMENTS:
+                    1. Use 'Host' and 'Expert' as speakers
+                    2. Always Format as:
+                       **Host:** [dialogue]
+                       **Expert:** [dialogue]"""
             }
             data['messages'] = [system_message, qna_prompt]
             response = requests.post(XAI_API_URL, headers=headers, json=data)
@@ -209,12 +205,19 @@ def generate_podcast_script(summarized_text_data):
         # Generate conclusion
         conclusion_prompt = {
             "role": "user",
-            "content": """Create a conclusion that:
-                1. Summarizes key points
+            "content": f"""Create a conclusion that:
+                1. Summarizes most relevant points from the following Q&A sections:
+                {''.join(dialogues[1:])} while still keeping in the context of the cover page: {first_page_text}
                 2. Provides a memorable takeaway
                 3. Includes a call to action
                 4. Thanks the audience
-                Keep it under 1 minute when spoken."""
+                5. In the dialog always refer to the host by their name and the expert as expert
+                Keep it under 1 minute when spoken.
+                REQUIREMENTS:
+                    1. Use 'Host' and 'Expert' as speakers
+                    2. Always Format as:
+                       **Host:** [dialogue]
+                       **Expert:** [dialogue]"""
         }
         data['messages'] = [system_message, conclusion_prompt]
         response = requests.post(XAI_API_URL, headers=headers, json=data)
@@ -367,13 +370,15 @@ def main():
 
                     summarized_text_data = summarize_text_data(text_data)
                     if not summarized_text_data:
-                        st.error("Failed to summarize text from the PDF.")
+                        st.error("Failed to summarize text from the PDF. Pages may be too long.")
                         return
 
                     st.subheader("Summarized Text Data")
                     st.write(summarized_text_data)
 
-                    script = generate_podcast_script(summarized_text_data)
+                    first_page_text = text_data[0]['text'] if text_data else summarized_text_data[0:4]['text']
+
+                    script = generate_podcast_script(summarized_text_data, first_page_text)
 
                     if script:
                         st.subheader("Generated Script")
@@ -382,11 +387,12 @@ def main():
                         st.write("Generating audio...")
                         audio_data = generate_audio(script)
                         if audio_data:
+                            st.session_state['audio_data'] = audio_data
                             st.audio(audio_data, format="audio/wav")
 
                             st.download_button(
                                 "Download Complete Podcast Audio",
-                                audio_data,
+                                st.session_state['audio_data'],
                                 file_name="complete_podcast.wav",
                                 mime="audio/wav",
                                 key="download_button"
