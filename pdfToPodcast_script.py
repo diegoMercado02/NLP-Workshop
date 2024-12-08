@@ -106,13 +106,31 @@ def process_uploaded_file(uploaded_file):
         st.error(f"Error processing uploaded file: {str(e)}")
         return None
 
+# %% [markdown]
+#  ## Text Chunking
+#  This function splits the text into chunks based on a maximum length to keep the podcast into a listenable length.
+def summary_splitter(summarized_text_data, podcast_length):
+    """Split summarized text data into chunks based on user-defined podcast length."""
+    if podcast_length not in [5, 10, 15]:
+        st.error("Invalid podcast length. Choose 5, 10, or 15.")
+        return []
+
+    chunks = []
+    num_summaries = len(summarized_text_data[1:])
+    summaries_per_chunk = num_summaries // podcast_length
+
+    for i in range(0, num_summaries, summaries_per_chunk):
+        chunk = summarized_text_data[1:][i:i + summaries_per_chunk]
+        chunks.append(chunk)
+
+    return chunks
 
 # %% [markdown]
 #  ## Script Generation
 #  This function turns our text into a natural conversation between a host and expert. I use the same formatting for both but change the label, this way its easy to process the audio.
 
 # %%
-def generate_podcast_script(summarized_text_data, first_page_text):
+def generate_podcast_script(summarized_text_data, first_page_text, podcast_length):
     try:
         dialogues = []
         headers = {
@@ -134,6 +152,15 @@ def generate_podcast_script(summarized_text_data, first_page_text):
                        **Host:** [dialogue]
                        **Expert:** [dialogue]"""
         }
+        
+        data = {
+            'model': MODEL,
+            'temperature': 0.7,
+            'max_tokens': 1000,
+            'top_p': 0.9,
+            'frequency_penalty': 0.2,
+            'presence_penalty': 0.2
+        }
 
         # Generate introduction
         introduction_prompt = {
@@ -150,15 +177,8 @@ def generate_podcast_script(summarized_text_data, first_page_text):
                 Host: Welcome to "Diego's AI podcasts," your go-to podcast for diving into complex topics with the help of artificial intelligence! I'm your host, Diego, and today we have a special guest who is an expert in [Expertise Area]. Joining us is [Expert Name], a [brief description of expertise]. They've been at the forefront of [mention relevant achievements or contributions]. Today, we'll be exploring [brief overview of podcast topic], delving deep into [specific aspect of the topic]. Get ready to dive into the fascinating world of [Theme/Topic]!
                 Expert: Thank you, Diego! I'm thrilled to be here and discuss [specific aspect of the topic]. It's an exciting time in [Expertise Area], and I'm looking forward to sharing insights and exploring new ideas with you.  Let's get started!"""
         }
-        data = {
-            'model': MODEL,
-            'messages': [system_message, introduction_prompt],
-            'temperature': 0.7,
-            'max_tokens': 1000,
-            'top_p': 0.9,
-            'frequency_penalty': 0.2,
-            'presence_penalty': 0.2
-        }
+
+        data['messages'] = [system_message, introduction_prompt]
         response = requests.post(XAI_API_URL, headers=headers, json=data)
         if response.status_code == 200:
             introduction = response.json()['choices'][0]['message']['content']
@@ -166,41 +186,45 @@ def generate_podcast_script(summarized_text_data, first_page_text):
         else:
             st.error(f"API error for introduction: {response.status_code} - {response.text}")
 
-        # Generate Q&A section
-        for i, item in enumerate(summarized_text_data):
-            qna_prompt = {
-                "role": "user",
-                "content": f"""Create a Q&A section based on the following content:
-                CONTENT:
-                {item['text']}
-                REQUIREMENTS:
-                1. Use 'Host' and 'Expert' as speakers
-                2. Format as:
-                   **Host:** [dialogue]
-                   **Expert:** [dialogue]
-                3. Include:
-                   - 1-2 clarifying questions from the Host
-                   - Real-world examples or analogies
-                   - Natural transitions
-                   - Relevant technical details
-                   - Paraphrase the questions and answers in a podcast-friendly way, not a literal Q&A
-                   - 
-                4. Maintain technical accuracy while being conversational
-                5. Keep responses concise (2-3 sentences per speaker turn)
-                6. Do not use phrases like today we are talking about, the topic of today is, etc.
-                    REQUIREMENTS:
-                    1. Use 'Host' and 'Expert' as speakers
-                    2. Always Format as:
-                       **Host:** [dialogue]
-                       **Expert:** [dialogue]"""
-            }
-            data['messages'] = [system_message, qna_prompt]
-            response = requests.post(XAI_API_URL, headers=headers, json=data)
-            if response.status_code == 200:
-                qna = response.json()['choices'][0]['message']['content']
-                dialogues.append(qna)
-            else:
-                st.error(f"API error for Q&A section {i+1}: {response.status_code} - {response.text}")
+        # Split summarized text data into chunks based on podcast length
+        num_summaries = len(summarized_text_data)
+        summaries_per_chunk = max(1, num_summaries // podcast_length)
+        chunks = []
+        for i in range(0, num_summaries, summaries_per_chunk):
+            chunk = summarized_text_data[1:][i:i + summaries_per_chunk]
+            chunks.append(chunk)
+
+        # Generate Q&A section for each chunk
+        for i, chunk in enumerate(chunks):
+            for item in chunk:
+                qna_prompt = {
+                    "role": "user",
+                    "content": f"""Create a Q&A section based on the following content:
+                    CONTENT:
+                    {item['text']}
+                    1. Include:
+                       - 1-2 clarifying questions from the Host
+                       - Real-world examples or analogies
+                       - Natural transitions
+                       - Relevant technical details
+                       - Paraphrase the questions and answers in a podcast-friendly way, not a literal Q&A
+                       - Maintain technical accuracy while being conversational
+                       - Keep responses concise (2-3 sentences per speaker turn)
+                       - Do not use phrases like today we are talking about, the topic of today is, etc.
+                    2. REQUIREMENTS:
+                        1. Use 'Host' and 'Expert' as speakers
+                        2. Always Format as:
+                           **Host:** [dialogue]
+                           **Expert:** [dialogue]"""
+                }
+
+                data['messages'] = [system_message, qna_prompt]
+                response = requests.post(XAI_API_URL, headers=headers, json=data)
+                if response.status_code == 200:
+                    qna = response.json()['choices'][0]['message']['content']
+                    dialogues.append(qna)
+                else:
+                    st.error(f"API error for Q&A section {i+1}: {response.status_code} - {response.text}")
 
         # Generate conclusion
         conclusion_prompt = {
@@ -219,6 +243,7 @@ def generate_podcast_script(summarized_text_data, first_page_text):
                        **Host:** [dialogue]
                        **Expert:** [dialogue]"""
         }
+
         data['messages'] = [system_message, conclusion_prompt]
         response = requests.post(XAI_API_URL, headers=headers, json=data)
         if response.status_code == 200:
@@ -352,6 +377,9 @@ def main():
 
     uploaded_file = st.file_uploader("Upload your PDF", type=["pdf"], accept_multiple_files=False)
 
+    # Add a selectbox for podcast length
+    podcast_length = st.selectbox("Select Podcast Length", [5, 10, 15])
+
     generate_button = st.button("Generate Script and Audio")
 
     if generate_button and uploaded_file is not None:
@@ -376,16 +404,17 @@ def main():
                     st.subheader("Summarized Text Data")
                     st.write(summarized_text_data)
 
-                    first_page_text = text_data[0]['text'] if text_data else summarized_text_data[0:4]['text']
+                    # Use the full first page text for the introduction
+                    first_page_text = text_data[0]['text'] + ' '.join([item['text'] for item in summarized_text_data[0:3]]) if text_data else ' '.join([item['text'] for item in summarized_text_data[0:3]])
 
-                    script = generate_podcast_script(summarized_text_data, first_page_text)
-
-                    if script:
+                    # Generate podcast script
+                    full_script = generate_podcast_script(summarized_text_data, first_page_text, podcast_length)
+                    if full_script:
                         st.subheader("Generated Script")
-                        st.text_area("Script", script, height=400)
+                        st.text_area("Script", full_script, height=400)
 
                         st.write("Generating audio...")
-                        audio_data = generate_audio(script)
+                        audio_data = generate_audio(full_script)
                         if audio_data:
                             st.session_state['audio_data'] = audio_data
                             st.audio(audio_data, format="audio/wav")
