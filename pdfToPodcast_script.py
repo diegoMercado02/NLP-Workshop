@@ -176,7 +176,7 @@ def generate_podcast_script(summarized_text_data, first_page_text, podcast_lengt
                     5. Keep a consistent tone throughout the conversation
                     REQUIREMENTS:
                     1. Use 'Host' and 'Expert' as speakers
-                    2. Always Format as:
+                    2. Always Format as (Never change the words **Host**: and **:Expert**: in formatting only inside dialogue):
                        **Host:** [dialogue]
                        **Expert:** [dialogue]"""
         }
@@ -246,7 +246,7 @@ def generate_podcast_script(summarized_text_data, first_page_text, podcast_lengt
                    - Do not use phrases like today we are talking about, the topic of today is, etc.
                 2. REQUIREMENTS:
                     1. Use 'Host' and 'Expert' as speakers
-                    2. Always Format as:
+                    2. Always Format as (Never change the words **Host**: and **:Expert**: in formatting only inside dialogue):
                        **Host:** [dialogue]
                        **Expert:** [dialogue]"""
             }
@@ -273,7 +273,7 @@ def generate_podcast_script(summarized_text_data, first_page_text, podcast_lengt
                 REQUIREMENTS:
                     1. Use 'Host' and 'Expert' as speakers
                     2. Refer in Dialog to host as Diego and expert as the name of the expert
-                    2. Always Format as:
+                    3. Always Format as (Never change the words **Host**: and **:Expert**: in formatting only inside dialogue):
                        **Host:** [dialogue]
                        **Expert:** [dialogue]"""
         }
@@ -340,11 +340,8 @@ def generate_audio(dialogue_text):
 
                 if line.startswith("**Host:**") or line.startswith("**Expert:**"):
                     speaker, _, text = line.partition(':')
-                    st.write(f"Raw speaker: {speaker}")
                     text = text.strip().lstrip("*").strip()
                     speaker = speaker.strip().lstrip("*").strip()
-                    st.write(f"Processed speaker: {speaker}")
-                    st.write(f"Text: {text}")
 
                     if not text:
                         continue
@@ -418,36 +415,42 @@ def main():
 
     if generate_button and uploaded_file is not None:
         try:
-            with st.spinner("Processing PDF and creating script..."):
+            progress_bar = st.progress(0)
+            status_text = st.empty()
+
+            with st.spinner("Creating podcast, Please wait this might take a while..."):
+                progress_bar.progress(10)
+                status_text.text("Step 1: Processing uploaded file...")
                 temp_pdf_path = process_uploaded_file(uploaded_file)
+                st.write(f"Processed PDF Successfully")
 
                 if temp_pdf_path:
+                    progress_bar.progress(30)
+                    status_text.text("Step 2: Extracting text from PDF...")
                     text_data = extract_text_from_pdf(temp_pdf_path)
                     if not text_data:
                         st.error("Failed to extract text from the PDF.")
                         return
+                    st.write(f"Extracted text from PDF Successfully")
 
-                    st.subheader("Extracted Text Data")
-                    st.write(text_data)
-
+                    progress_bar.progress(50)
+                    status_text.text("Step 3: Summarizing text data...")
                     summarized_text_data = summarize_text_data(text_data)
                     if not summarized_text_data:
                         st.error("Failed to summarize text from the PDF. Pages may be too long.")
                         return
+                    st.write(f"Summarized text data Successfully")
 
-                    st.subheader("Summarized Text Data")
-                    st.write(summarized_text_data)
-
-                    # Use the full first page text for the introduction
+                    progress_bar.progress(70)
+                    status_text.text("Step 4: Generating podcast script...")
                     first_page_text = text_data[0]['text'] + ' '.join([item['text'] for item in summarized_text_data[0:3]]) if text_data else ' '.join([item['text'] for item in summarized_text_data[0:3]])
-
-                    # Generate podcast script
                     full_script = generate_podcast_script(summarized_text_data, first_page_text, podcast_length)
                     if full_script:
                         st.subheader("Generated Script")
                         st.text_area("Script", full_script, height=400)
 
-                        st.write("Generating audio...")
+                        progress_bar.progress(90)
+                        status_text.text("Step 5: Generating audio...")
                         audio_data = generate_audio(full_script)
                         if audio_data:
                             st.session_state['audio_data'] = audio_data
@@ -467,12 +470,16 @@ def main():
 
                     os.unlink(temp_pdf_path)
 
+                progress_bar.progress(100)
+                status_text.text("Process completed successfully!")
+
         except KeyboardInterrupt:
             st.warning("Process interrupted by user.")
             tf.keras.backend.clear_session()
             st.stop()
         except Exception as e:
             st.error(f"An error occurred: {str(e)}")
+
 
 # %% [markdown]
 # This file is originally a .py so I can run it with streamlit, but i converted it into a notebook to add explanations
