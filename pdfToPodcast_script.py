@@ -2,7 +2,6 @@
 #  # PDF to Podcast Generator
 #  This notebook converts PDF documents into engaging podcast-style audio content using AI. The goial was to create a tool that allows me understanding pdf by just listening for example while biking. This pdf can be fromn the internet as it can be my notes for a presentation, which is really fun to listen to compared to reading them.
 
-# %%
 
 
 # %% [markdown]
@@ -63,6 +62,9 @@ def extract_text_from_pdf(pdf_path):
         st.error(f"Error extracting text from PDF: {str(e)}")
         return None
 
+# %% [markdown]
+#  ## Text Chunking
+#  This function splits the text into chunks based on a maximum length of input to the summarizer (1024 for facebook/Bart-large-cnn) to keep the context of every page in summariessed form.
 
 # %%
 def chunk_page(text, max_tokens=1024):
@@ -86,6 +88,10 @@ def count_tokens(text):
     """Count the number of tokens in a text."""
     return len(text.split())
 
+
+# %% [markdown]
+#  ## Text Summarization
+#  This function summarizes text using a Hugging Face pipeline. It chunks the text into smaller pieces to avoid exceeding the token limit.
 
 # %%
 
@@ -136,7 +142,9 @@ def process_uploaded_file(uploaded_file):
 
 # %% [markdown]
 #  ## Text Chunking
-#  This function splits the text into chunks based on a maximum length to keep the podcast into a listenable length.
+#  This function groups the summaries text into chunks based on a maximum length (Listenting time) to keep the podcast in the desired length. Every grouping is passed then to the model to create a dialogue between the host and the expert.
+
+# %%
 def summary_grouper(summarized_text_data, podcast_length):
     """Split summarized text data into chunks based on user-defined podcast length."""
     if podcast_length not in [5, 10, 15]:
@@ -155,7 +163,7 @@ def summary_grouper(summarized_text_data, podcast_length):
 
 # %% [markdown]
 #  ## Script Generation
-#  This function turns our text into a natural conversation between a host and expert. I use the same formatting for both but change the label, this way its easy to process the audio.
+#  This function turns our text into a natural conversation between a host and expert. I use the same formatting for both but change the label, this way its easy to process the audio. It First creates a introduction using the data from the first page, then creates a Q&A section for each chunk of the text, and finally creates a conclusion based on the script. This way it creates a natural flow for the podcast and keeps the name of the authors.
 
 # %%
 def generate_podcast_script(summarized_text_data, first_page_text, podcast_length):
@@ -166,6 +174,7 @@ def generate_podcast_script(summarized_text_data, first_page_text, podcast_lengt
             'Authorization': f'Bearer {XAI_API_KEY}'
         }
 
+        # System message for the AI model passed on every prompt
         system_message = {
             "role": "system",
             "content": """You are an expert podcast script writer. Your task is to:
