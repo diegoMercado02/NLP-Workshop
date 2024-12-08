@@ -64,6 +64,28 @@ def extract_text_from_pdf(pdf_path):
         return None
 
 
+# %%
+def chunk_page(text, max_tokens=1024):
+    """Split text into equal size chunks if it exceeds the max token limit."""
+    total_tokens = count_tokens(text)
+    if total_tokens <= max_tokens:
+        return [text]
+
+    num_chunks = (total_tokens + max_tokens - 1) // max_tokens
+    chunk_size = total_tokens // num_chunks
+
+    words = text.split()
+    chunks = []
+    for i in range(0, total_tokens, chunk_size):
+        chunk = ' '.join(words[i:i + chunk_size])
+        chunks.append(chunk)
+
+    return chunks
+
+def count_tokens(text):
+    """Count the number of tokens in a text."""
+    return len(text.split())
+
 
 # %%
 
@@ -71,8 +93,14 @@ def summarize_text(text):
     """Summarize text using a Hugging Face pipeline."""
     try:
         summarizer = pipeline("summarization", model="facebook/bart-large-cnn")
-        summary = summarizer(text, max_length=150, min_length=30, do_sample=False)
-        return summary[0]['summary_text']
+        chunks = chunk_page(text)
+        summaries = []
+
+        for chunk in chunks:
+            summary = summarizer(chunk, max_length=150, min_length=30, do_sample=False)
+            summaries.append(summary[0]['summary_text'])
+
+        return ' '.join(summaries)
     except Exception as e:
         st.error(f"Error summarizing text: {str(e)}")
         return None
@@ -109,7 +137,7 @@ def process_uploaded_file(uploaded_file):
 # %% [markdown]
 #  ## Text Chunking
 #  This function splits the text into chunks based on a maximum length to keep the podcast into a listenable length.
-def summary_splitter(summarized_text_data, podcast_length):
+def summary_grouper(summarized_text_data, podcast_length):
     """Split summarized text data into chunks based on user-defined podcast length."""
     if podcast_length not in [5, 10, 15]:
         st.error("Invalid podcast length. Choose 5, 10, or 15.")
@@ -158,7 +186,7 @@ def generate_podcast_script(summarized_text_data, first_page_text, podcast_lengt
             'temperature': 0.7,
             'max_tokens': 1000,
             'top_p': 0.9,
-            'frequency_penalty': 0.2,
+            'frequency_penalty': 0.3,
             'presence_penalty': 0.2
         }
 
@@ -186,52 +214,57 @@ def generate_podcast_script(summarized_text_data, first_page_text, podcast_lengt
         else:
             st.error(f"API error for introduction: {response.status_code} - {response.text}")
 
-        # Split summarized text data into chunks based on podcast length
-        num_summaries = len(summarized_text_data)
-        summaries_per_chunk = max(1, num_summaries // podcast_length)
-        chunks = []
-        for i in range(0, num_summaries, summaries_per_chunk):
-            chunk = summarized_text_data[1:][i:i + summaries_per_chunk]
-            chunks.append(chunk)
+        # Split summarized text data into chunks based on desired podcast length
+
+        # Map podcast length to number of chunks
+        length_mapping = {
+            "Short (15 min)": 5,
+            "Medium (30 min)": 10,
+            "Long (45 min)": 15
+        }
+
+        # Get the number of chunks based on the selected podcast length
+        num_chunks = length_mapping.get(podcast_length)
+        chunks = summary_grouper(summarized_text_data, num_chunks)
 
         # Generate Q&A section for each chunk
         for i, chunk in enumerate(chunks):
-            for item in chunk:
-                qna_prompt = {
-                    "role": "user",
-                    "content": f"""Create a Q&A section based on the following content:
-                    CONTENT:
-                    {item['text']}
-                    1. Include:
-                       - 1-2 clarifying questions from the Host
-                       - Real-world examples or analogies
-                       - Natural transitions
-                       - Relevant technical details
-                       - Paraphrase the questions and answers in a podcast-friendly way, not a literal Q&A
-                       - Maintain technical accuracy while being conversational
-                       - Keep responses concise (2-3 sentences per speaker turn)
-                       - Do not use phrases like today we are talking about, the topic of today is, etc.
-                    2. REQUIREMENTS:
-                        1. Use 'Host' and 'Expert' as speakers
-                        2. Always Format as:
-                           **Host:** [dialogue]
-                           **Expert:** [dialogue]"""
-                }
+            combined_text = ' '.join([item['text'] for item in chunk])
+            qna_prompt = {
+                "role": "user",
+                "content": f"""Create a Q&A section based on the following content:
+                CONTENT:
+                {combined_text}
+                1. Include:
+                   - 1-2 clarifying questions from the Host
+                   - Real-world examples or analogies
+                   - Natural transitions
+                   - Relevant technical details
+                   - Paraphrase the questions and answers in a podcast-friendly way, not a literal Q&A
+                   - Maintain technical accuracy while being conversational
+                   - Keep responses concise (2-3 sentences per speaker turn)
+                   - Do not use phrases like today we are talking about, the topic of today is, etc.
+                2. REQUIREMENTS:
+                    1. Use 'Host' and 'Expert' as speakers
+                    2. Always Format as:
+                       **Host:** [dialogue]
+                       **Expert:** [dialogue]"""
+            }
 
-                data['messages'] = [system_message, qna_prompt]
-                response = requests.post(XAI_API_URL, headers=headers, json=data)
-                if response.status_code == 200:
-                    qna = response.json()['choices'][0]['message']['content']
-                    dialogues.append(qna)
-                else:
-                    st.error(f"API error for Q&A section {i+1}: {response.status_code} - {response.text}")
+            data['messages'] = [system_message, qna_prompt]
+            response = requests.post(XAI_API_URL, headers=headers, json=data)
+            if response.status_code == 200:
+                qna = response.json()['choices'][0]['message']['content']
+                dialogues.append(qna)
+            else:
+                st.error(f"API error for Q&A section {i+1}: {response.status_code} - {response.text}")
 
         # Generate conclusion
         conclusion_prompt = {
             "role": "user",
             "content": f"""Create a conclusion that:
                 1. Summarizes most relevant points from the following Q&A sections:
-                {''.join(dialogues[1:])} while still keeping in the context of the cover page: {first_page_text}
+                {''.join(dialogues[1:])} while still keeping in the context of the cover page (name of Expert, pdf objective): {dialogues[0]}
                 2. Provides a memorable takeaway
                 3. Includes a call to action
                 4. Thanks the audience
@@ -239,6 +272,7 @@ def generate_podcast_script(summarized_text_data, first_page_text, podcast_lengt
                 Keep it under 1 minute when spoken.
                 REQUIREMENTS:
                     1. Use 'Host' and 'Expert' as speakers
+                    2. Refer in Dialog to host as Diego and expert as the name of the expert
                     2. Always Format as:
                        **Host:** [dialogue]
                        **Expert:** [dialogue]"""
@@ -378,7 +412,7 @@ def main():
     uploaded_file = st.file_uploader("Upload your PDF", type=["pdf"], accept_multiple_files=False)
 
     # Add a selectbox for podcast length
-    podcast_length = st.selectbox("Select Podcast Length", [5, 10, 15])
+    podcast_length = st.selectbox("Select Podcast Length", ["Short (15 min)", "Medium (30 min)", "Long (45 min)"])
 
     generate_button = st.button("Generate Script and Audio")
 
