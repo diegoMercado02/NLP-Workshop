@@ -14,7 +14,6 @@ import requests
 import os
 import tempfile
 import subprocess
-from dotenv import load_dotenv
 from pypdf import PdfReader
 import tensorflow as tf
 from transformers import pipeline
@@ -26,15 +25,14 @@ import asyncio
 #  ## Load Environment Variables
 #  We need to load the API key from the environment.
 
-# %%
-load_dotenv()
-
 # %% [markdown]
 #  ## Set Up Constants
 #  These are the main settings we'll use throughout the program I decided on grok-beta as XAI has a open testing for up to 25 euros of credits, which was plenty for this project.
 
+os.environ['OPENAI_API_KEY'] = st.secrets['OPENAI_API_KEY']
+
 # %%
-XAI_API_KEY = os.getenv("XAI_API_KEY")
+XAI_API_KEY = os.environ['OPENAI_API_KEY']
 XAI_API_URL = "https://api.x.ai/v1/chat/completions"
 MODEL = "grok-beta"
 AVERAGE_SPEAKING_SPEED_WPM = 150
